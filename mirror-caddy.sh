@@ -125,11 +125,11 @@ enumerate_files() {
 
         if [[ "$is_dir" == "true" ]]; then
             # Recursively process directory
-            local dir_url="${BASE_URL}${url_path}"
+            local dir_url="${url}${url_path}"
             enumerate_files "$dir_url" "${full_path}/"
         else
             # Output file path and URL (tab-separated)
-            echo -e "${full_path}\t${BASE_URL}${url_path}"
+            echo -e "${full_path}\t${url}${url_path}"
         fi
     done
 }
