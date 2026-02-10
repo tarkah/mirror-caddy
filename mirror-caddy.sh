@@ -220,9 +220,21 @@ download_file() {
     fi
 
     # Download file and capture headers
+    if [[ $VERBOSE -eq 1 ]]; then
+        debug "Executing: curl $(printf '%q ' "${curl_args[@]}") $(printf '%q' "$url")"
+    fi
+
     local headers
     if headers=$(curl "${curl_args[@]}" "$url" 2>&1 >/dev/null); then
         local http_code=$(echo "$headers" | grep -i '^HTTP/' | tail -n1 | awk '{print $2}')
+
+        if [[ $VERBOSE -eq 1 ]]; then
+            debug "HTTP Status: $http_code"
+            debug "Response Headers:"
+            echo "$headers" | while IFS= read -r line; do
+                [[ -n "$line" ]] && debug "  $line"
+            done
+        fi
 
         if [[ "$http_code" == "304" ]]; then
             warn "Not modified: $file_path"
