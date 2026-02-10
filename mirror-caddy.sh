@@ -107,6 +107,12 @@ check_dependency() {
     fi
 }
 
+# Wrapper function to execute curl with trace logging
+run_curl() {
+    trace "Executing: curl $(printf '%q ' "$@")"
+    curl "$@" 2>&1
+}
+
 # Check arguments
 if [[ -z "$BASE_URL" ]]; then
     usage
@@ -154,7 +160,7 @@ enumerate_files() {
 
     # Fetch JSON listing from Caddy
     local json_response
-    if ! json_response=$(curl -sf -H "Accept: application/json" "$url"); then
+    if ! json_response=$(run_curl -sf -H "Accept: application/json" "$url"); then
         error "Failed to fetch directory listing from $url"
         return 1
     fi
@@ -234,12 +240,8 @@ download_file() {
     fi
 
     # Download file and capture headers
-    if [[ $VERBOSE -ge 2 ]]; then
-        trace "Executing: curl $(printf '%q ' "${curl_args[@]}") $(printf '%q' "$url")"
-    fi
-
     local headers
-    if headers=$(curl "${curl_args[@]}" "$url" 2>&1 >/dev/null); then
+    if headers=$(run_curl "${curl_args[@]}" "$url"); then
         local http_code=$(echo "$headers" | grep -i '^HTTP/' | tail -n1 | awk '{print $2}')
 
         if [[ $VERBOSE -ge 2 ]]; then
@@ -251,7 +253,7 @@ download_file() {
         fi
 
         if [[ "$http_code" == "304" ]]; then
-            info "⏭️ ${MAGENTA}Unmodified${NC}: $file_path"
+            info "⏭️  ${MAGENTA}Unmodified${NC}: $file_path"
             return 0
         fi
 
@@ -260,7 +262,7 @@ download_file() {
         local last_modified=$(echo "$headers" | grep -i '^last-modified:' | cut -d: -f2- | tr -d '\r' | xargs)
 
         save_headers "$file_path" "$etag" "$last_modified"
-        info "⬇️ ${GREEN}Downloaded${NC}: $file_path"
+        info "⬇️  ${GREEN}Downloaded${NC}: $file_path"
     else
         error "Failed to download: $file_path"
         return 1
@@ -268,7 +270,7 @@ download_file() {
 }
 
 # Export functions for use in subshells
-export -f enumerate_files download_file save_headers info error warn debug trace
+export -f enumerate_files download_file save_headers run_curl info error warn debug trace
 export BASE_URL DOWNLOAD_DIR METADATA_DIR PARALLEL_JOBS GREEN RED YELLOW MAGENTA CYAN NC VERBOSE
 
 # Main execution info "Starting mirror from $BASE_URL to $DOWNLOAD_DIR"
