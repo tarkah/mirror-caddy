@@ -43,7 +43,7 @@ YELLOW='\033[1;33m'
 MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
-log() {
+info() {
     echo -e "${GREEN}[INFO]${NC} $*" >&2
 }
 
@@ -136,7 +136,7 @@ enumerate_files() {
     local url="$1"
     local path_prefix="$2"
 
-    log "Fetching directory listing: $url"
+    debug "Fetching directory listing: $url"
 
     # Fetch JSON listing from Caddy
     local json_response
@@ -237,7 +237,7 @@ download_file() {
         fi
 
         if [[ "$http_code" == "304" ]]; then
-            warn "Not modified: $file_path"
+            info "⏭️ ${MAGENTA}Unmodified${NC}: $file_path"
             return 0
         fi
 
@@ -246,7 +246,7 @@ download_file() {
         local last_modified=$(echo "$headers" | grep -i '^last-modified:' | cut -d: -f2- | tr -d '\r' | xargs)
 
         save_headers "$file_path" "$etag" "$last_modified"
-        log "Downloaded: $file_path"
+        info "⬇️ ${GREEN}Downloaded${NC}: $file_path"
     else
         error "Failed to download: $file_path"
         return 1
@@ -254,30 +254,28 @@ download_file() {
 }
 
 # Export functions for use in subshells
-export -f enumerate_files download_file save_headers log error warn debug
+export -f enumerate_files download_file save_headers info error warn debug
 export BASE_URL DOWNLOAD_DIR METADATA_DIR PARALLEL_JOBS GREEN RED YELLOW MAGENTA NC VERBOSE
 
-# Main execution
-log "Starting mirror from $BASE_URL to $DOWNLOAD_DIR"
+# Main execution info "Starting mirror from $BASE_URL to $DOWNLOAD_DIR"
 
-# Enumerate all files
-log "Enumerating files..."
+# Enumerate all files info "Enumerating files..."
+info "Enumerating files to download from $BASE_URL"
 enumerate_files "$BASE_URL/" "" > "$TEMP_FILE_LIST"
 
 # Count files
 file_count=$(wc -l < "$TEMP_FILE_LIST")
-log "Found $file_count files to process"
+info "Found $file_count files to process"
 
 if [[ $file_count -eq 0 ]]; then
-    log "No files to download"
+    info "No files to download"
     exit 0
 fi
 
-# Download files in parallel
-log "Downloading files with $PARALLEL_JOBS parallel jobs..."
+# Download files in parallel info "Downloading files with $PARALLEL_JOBS parallel jobs..."
 cat "$TEMP_FILE_LIST" | xargs -P "$PARALLEL_JOBS" -I {} bash -c '
     IFS=$'\''\t'\'' read -r file_path url <<< "{}"
     download_file "$file_path" "$url"
 '
 
-log "Mirror complete!"
+info "Mirror complete!"
