@@ -118,6 +118,9 @@ enumerate_files() {
             continue
         fi
 
+        # Normalize URL path by removing leading ./
+        url_path="${url_path#./}"
+
         local full_path="${path_prefix}${name}"
 
         if [[ "$is_dir" == "true" ]]; then
