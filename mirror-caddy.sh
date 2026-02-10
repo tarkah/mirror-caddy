@@ -211,7 +211,7 @@ download_file() {
         local cached_last_modified=$(grep '^last_modified=' "$metadata_file" | cut -d= -f2-)
 
         if [[ -n "$cached_etag" && "$cached_etag" != "null" ]]; then
-            curl_args+=(-H "If-None-Match: $cached_etag")
+            curl_args+=(-H "If-None-Match: \"$cached_etag\"")
         fi
 
         if [[ -n "$cached_last_modified" && "$cached_last_modified" != "null" ]]; then
