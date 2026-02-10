@@ -145,10 +145,9 @@ enumerate_files() {
         return 1
     fi
 
-    # Parse JSON and process each entry
-    echo "$json_response" | jq -r '.[] | @json' | while IFS= read -r entry; do
+    # Process files (output immediately)
+    echo "$json_response" | jq -r '.[] | select(.is_dir == false) | @json' | while IFS= read -r entry; do
         local name=$(echo "$entry" | jq -r '.name')
-        local is_dir=$(echo "$entry" | jq -r '.is_dir')
         local url_path=$(echo "$entry" | jq -r '.url')
 
         # Skip . and .. entries
@@ -163,17 +162,34 @@ enumerate_files() {
         name="${name%/}"
 
         local full_path="${path_prefix}${name}"
-
-        if [[ "$is_dir" == "true" ]]; then
-            # Recursively process directory
-            local dir_url="${url}${url_path}"
-            enumerate_files "$dir_url" "${full_path}/"
-        else
-            # Output file path and URL (tab-separated)
-            debug "Found file: ${full_path} -> ${url}${url_path}"
-            echo -e "${full_path}\t${url}${url_path}"
-        fi
+        debug "Found file: ${full_path} -> ${url}${url_path}"
+        echo -e "${full_path}\t${url}${url_path}"
     done
+
+    # Process directories in parallel
+    echo "$json_response" | jq -r '.[] | select(.is_dir == true) | @json' | while IFS= read -r entry; do
+        local name=$(echo "$entry" | jq -r '.name')
+        local url_path=$(echo "$entry" | jq -r '.url')
+
+        # Skip . and .. entries
+        if [[ "$name" == "." || "$name" == ".." ]]; then
+            continue
+        fi
+
+        # Normalize URL path by removing leading ./
+        url_path="${url_path#./}"
+
+        # Strip trailing slashes from name
+        name="${name%/}"
+
+        local full_path="${path_prefix}${name}"
+        local dir_url="${url}${url_path}"
+
+        echo -e "${dir_url}\t${full_path}/"
+    done | xargs -P "$PARALLEL_JOBS" -I {} bash -c '
+        IFS=$'\''\t'\'' read -r dir_url dir_path <<< "{}"
+        enumerate_files "$dir_url" "$dir_path"
+    '
 }
 
 # Function to download a single file with caching
@@ -226,8 +242,8 @@ download_file() {
 }
 
 # Export functions for use in subshells
-export -f download_file save_headers log error warn debug
-export BASE_URL DOWNLOAD_DIR METADATA_DIR GREEN RED YELLOW MAGENTA NC VERBOSE
+export -f enumerate_files download_file save_headers log error warn debug
+export BASE_URL DOWNLOAD_DIR METADATA_DIR PARALLEL_JOBS GREEN RED YELLOW MAGENTA NC VERBOSE
 
 # Main execution
 log "Starting mirror from $BASE_URL to $DOWNLOAD_DIR"
