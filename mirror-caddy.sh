@@ -47,10 +47,21 @@ EOF
     exit 1
 }
 
+check_dependency() {
+    local cmd="$1"
+    if ! command -v "$cmd" &> /dev/null; then
+        error "$cmd is required but not installed. Please install $cmd and try again."
+        exit 1
+    fi
+}
+
 # Check arguments
 if [[ -z "$BASE_URL" ]]; then
     usage
 fi
+
+# Check dependencies
+check_dependency jq
 
 # Create directories
 mkdir -p "$DOWNLOAD_DIR" "$METADATA_DIR"
