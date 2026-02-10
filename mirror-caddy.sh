@@ -64,13 +64,55 @@ warn() {
 
 debug() {
     if [[ $VERBOSE -ge 1 ]]; then
+        printf "\r\033[K" >&2  # Clear spinner line if active
         echo -e "${MAGENTA}[DEBUG]${NC} $*" >&2
     fi
 }
 
 trace() {
     if [[ $VERBOSE -ge 2 ]]; then
+        printf "\r\033[K" >&2  # Clear spinner line if active
         echo -e "${CYAN}[TRACE]${NC} $*" >&2
+    fi
+}
+
+# Spinner variables
+SPINNER_ACTIVE=0
+SPINNER_PID=""
+SPINNER_FILE=""
+
+# Start spinner that monitors file count in temp file
+start_spinner() {
+    local temp_file="$1"
+    SPINNER_ACTIVE=1
+    SPINNER_FILE="/tmp/spinner-$$-active.txt"
+    touch "$SPINNER_FILE"
+
+    # Background process to animate spinner
+    (
+        local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+        local i=0
+        while [[ -f "$SPINNER_FILE" ]]; do
+            local count=0
+            if [[ -f "$temp_file" ]]; then
+                count=$(wc -l < "$temp_file" 2>/dev/null || echo "0")
+            fi
+            printf "\r${GREEN}[INFO]${NC} %s Enumerating files... %d found" "${frames[$i]}" "$count" >&2
+            i=$(( (i + 1) % ${#frames[@]} ))
+            sleep 0.1
+        done
+        printf "\r\033[K" >&2  # Clear line
+    ) &
+    SPINNER_PID=$!
+}
+
+# Stop spinner
+stop_spinner() {
+    if [[ $SPINNER_ACTIVE -eq 1 && -n "$SPINNER_PID" ]]; then
+        rm -f "$SPINNER_FILE"
+        wait "$SPINNER_PID" 2>/dev/null
+        SPINNER_ACTIVE=0
+        SPINNER_PID=""
     fi
 }
 
@@ -124,8 +166,12 @@ check_dependency jq
 # Create directories
 mkdir -p "$DOWNLOAD_DIR" "$METADATA_DIR"
 
-# Clean up temp file on exit
-trap 'rm -f "$TEMP_FILE_LIST"' EXIT
+# Clean up on exit
+cleanup() {
+    stop_spinner
+    rm -f "$TEMP_FILE_LIST"
+}
+trap cleanup EXIT INT TERM
 
 # Function to get cached headers for a file
 get_cached_headers() {
@@ -273,11 +319,19 @@ download_file() {
 export -f enumerate_files download_file save_headers run_curl info error warn debug trace
 export BASE_URL DOWNLOAD_DIR METADATA_DIR PARALLEL_JOBS GREEN RED YELLOW MAGENTA CYAN NC VERBOSE
 
-# Main execution info "Starting mirror from $BASE_URL to $DOWNLOAD_DIR"
+# Main execution
+info "Starting mirror from $BASE_URL to $DOWNLOAD_DIR"
 
-# Enumerate all files info "Enumerating files..."
-info "Enumerating files to download from $BASE_URL"
+if [[ $VERBOSE -eq 0 ]]; then
+    start_spinner "$TEMP_FILE_LIST"
+fi
+
+# Enumerate all files
 enumerate_files "$BASE_URL/" "" > "$TEMP_FILE_LIST"
+
+if [[ $VERBOSE -eq 0 ]]; then
+    stop_spinner
+fi
 
 # Count files
 file_count=$(wc -l < "$TEMP_FILE_LIST")
@@ -288,7 +342,8 @@ if [[ $file_count -eq 0 ]]; then
     exit 0
 fi
 
-# Download files in parallel info "Downloading files with $PARALLEL_JOBS parallel jobs..."
+# Download files in parallel
+info "Downloading files with $PARALLEL_JOBS parallel jobs..."
 cat "$TEMP_FILE_LIST" | xargs -P "$PARALLEL_JOBS" -I {} bash -c '
     IFS=$'\''\t'\'' read -r file_path url <<< "{}"
     download_file "$file_path" "$url"
