@@ -10,8 +10,14 @@ DOWNLOAD_DIR="."
 # Parse options
 while [[ $# -gt 0 ]]; do
     case $1 in
-        -v|--verbose)
-            VERBOSE=1
+        -v*)
+            # Count number of v's
+            opt="${1#-}"
+            VERBOSE=${#opt}
+            shift
+            ;;
+        --verbose)
+            ((VERBOSE++))
             shift
             ;;
         -*)
@@ -41,6 +47,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 MAGENTA='\033[0;35m'
+CYAN='\033[0;96m'
 NC='\033[0m' # No Color
 
 info() {
@@ -56,8 +63,14 @@ warn() {
 }
 
 debug() {
-    if [[ $VERBOSE -eq 1 ]]; then
+    if [[ $VERBOSE -ge 1 ]]; then
         echo -e "${MAGENTA}[DEBUG]${NC} $*" >&2
+    fi
+}
+
+trace() {
+    if [[ $VERBOSE -ge 2 ]]; then
+        echo -e "${CYAN}[TRACE]${NC} $*" >&2
     fi
 }
 
@@ -72,7 +85,7 @@ Arguments:
   download-dir  Local directory to download files to (default: current directory)
 
 Options:
-  -v, --verbose Enable verbose/debug output
+  -v, --verbose Enable verbose/debug output (use -vv for trace level with curl debugging)
 
 Environment:
   PARALLEL_JOBS Number of parallel downloads (default: 8)
@@ -80,6 +93,7 @@ Environment:
 Examples:
   $0 http://localhost:8080 ./mirror
   $0 -v http://localhost:8080 ./mirror
+  $0 -vv http://localhost:8080 ./mirror
   PARALLEL_JOBS=16 $0 http://example.com/files ./downloads
 EOF
     exit 1
@@ -220,19 +234,19 @@ download_file() {
     fi
 
     # Download file and capture headers
-    if [[ $VERBOSE -eq 1 ]]; then
-        debug "Executing: curl $(printf '%q ' "${curl_args[@]}") $(printf '%q' "$url")"
+    if [[ $VERBOSE -ge 2 ]]; then
+        trace "Executing: curl $(printf '%q ' "${curl_args[@]}") $(printf '%q' "$url")"
     fi
 
     local headers
     if headers=$(curl "${curl_args[@]}" "$url" 2>&1 >/dev/null); then
         local http_code=$(echo "$headers" | grep -i '^HTTP/' | tail -n1 | awk '{print $2}')
 
-        if [[ $VERBOSE -eq 1 ]]; then
-            debug "HTTP Status: $http_code"
-            debug "Response Headers:"
+        if [[ $VERBOSE -ge 2 ]]; then
+            trace "HTTP Status: $http_code"
+            trace "Response Headers:"
             echo "$headers" | while IFS= read -r line; do
-                [[ -n "$line" ]] && debug "  $line"
+                [[ -n "$line" ]] && trace "  $line"
             done
         fi
 
@@ -254,8 +268,8 @@ download_file() {
 }
 
 # Export functions for use in subshells
-export -f enumerate_files download_file save_headers info error warn debug
-export BASE_URL DOWNLOAD_DIR METADATA_DIR PARALLEL_JOBS GREEN RED YELLOW MAGENTA NC VERBOSE
+export -f enumerate_files download_file save_headers info error warn debug trace
+export BASE_URL DOWNLOAD_DIR METADATA_DIR PARALLEL_JOBS GREEN RED YELLOW MAGENTA CYAN NC VERBOSE
 
 # Main execution info "Starting mirror from $BASE_URL to $DOWNLOAD_DIR"
 
