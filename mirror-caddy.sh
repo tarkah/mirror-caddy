@@ -3,8 +3,35 @@
 set -euo pipefail
 
 # Configuration
-BASE_URL="${1:-}"
-DOWNLOAD_DIR="${2:-.}"
+VERBOSE=0
+BASE_URL=""
+DOWNLOAD_DIR="."
+
+# Parse options
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -v|--verbose)
+            VERBOSE=1
+            shift
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            exit 1
+            ;;
+        *)
+            if [[ -z "$BASE_URL" ]]; then
+                BASE_URL="$1"
+            elif [[ "$DOWNLOAD_DIR" == "." ]]; then
+                DOWNLOAD_DIR="$1"
+            else
+                echo "Too many arguments" >&2
+                exit 1
+            fi
+            shift
+            ;;
+    esac
+done
+
 METADATA_DIR="${DOWNLOAD_DIR}/.metadata"
 PARALLEL_JOBS="${PARALLEL_JOBS:-8}"
 TEMP_FILE_LIST="/tmp/mirror-caddy-files-$$.txt"
@@ -13,6 +40,7 @@ TEMP_FILE_LIST="/tmp/mirror-caddy-files-$$.txt"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
 log() {
@@ -27,9 +55,15 @@ warn() {
     echo -e "${YELLOW}[WARN]${NC} $*" >&2
 }
 
+debug() {
+    if [[ $VERBOSE -eq 1 ]]; then
+        echo -e "${MAGENTA}[DEBUG]${NC} $*" >&2
+    fi
+}
+
 usage() {
     cat <<EOF
-Usage: $0 <base-url> [download-dir]
+Usage: $0 [options] <base-url> [download-dir]
 
 Mirror files from a Caddy file server with browse enabled.
 
@@ -37,11 +71,15 @@ Arguments:
   base-url      Base URL of the Caddy file server (e.g., http://localhost:8080)
   download-dir  Local directory to download files to (default: current directory)
 
+Options:
+  -v, --verbose Enable verbose/debug output
+
 Environment:
   PARALLEL_JOBS Number of parallel downloads (default: 8)
 
 Examples:
   $0 http://localhost:8080 ./mirror
+  $0 -v http://localhost:8080 ./mirror
   PARALLEL_JOBS=16 $0 http://example.com/files ./downloads
 EOF
     exit 1
@@ -129,6 +167,7 @@ enumerate_files() {
             enumerate_files "$dir_url" "${full_path}/"
         else
             # Output file path and URL (tab-separated)
+            debug "Found file: ${full_path} -> ${url}${url_path}"
             echo -e "${full_path}\t${url}${url_path}"
         fi
     done
@@ -184,8 +223,8 @@ download_file() {
 }
 
 # Export functions for use in subshells
-export -f download_file save_headers log error warn
-export BASE_URL DOWNLOAD_DIR METADATA_DIR GREEN RED YELLOW NC
+export -f download_file save_headers log error warn debug
+export BASE_URL DOWNLOAD_DIR METADATA_DIR GREEN RED YELLOW MAGENTA NC VERBOSE
 
 # Main execution
 log "Starting mirror from $BASE_URL to $DOWNLOAD_DIR"
