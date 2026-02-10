@@ -159,6 +159,9 @@ enumerate_files() {
         # Normalize URL path by removing leading ./
         url_path="${url_path#./}"
 
+        # Strip trailing slashes from name
+        name="${name%/}"
+
         local full_path="${path_prefix}${name}"
 
         if [[ "$is_dir" == "true" ]]; then
