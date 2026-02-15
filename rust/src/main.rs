@@ -1,6 +1,8 @@
 use clap::Parser;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+
+use tokio::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -87,8 +89,8 @@ struct CaddyEntry {
 
 // ── Metadata ────────────────────────────────────────────────────────────────
 
-fn read_metadata(path: &Path) -> (Option<String>, Option<String>) {
-    let Ok(content) = std::fs::read_to_string(path) else {
+async fn read_metadata(path: &Path) -> (Option<String>, Option<String>) {
+    let Ok(content) = fs::read_to_string(path).await else {
         return (None, None);
     };
     let mut etag = None;
@@ -107,11 +109,11 @@ fn read_metadata(path: &Path) -> (Option<String>, Option<String>) {
     (etag, last_modified)
 }
 
-fn save_metadata(path: &Path, etag: &str, last_modified: &str) {
+async fn save_metadata(path: &Path, etag: &str, last_modified: &str) {
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        let _ = fs::create_dir_all(parent).await;
     }
-    let _ = std::fs::write(path, format!("etag={etag}\nlast_modified={last_modified}\n"));
+    let _ = fs::write(path, format!("etag={etag}\nlast_modified={last_modified}\n")).await;
 }
 
 // ── Enumeration ─────────────────────────────────────────────────────────────
@@ -251,6 +253,9 @@ enum DlResult {
     Failed,
 }
 
+const MAX_RETRIES: u32 = 3;
+const RETRY_DELAYS: &[u64] = &[500, 2000, 5000]; // ms
+
 async fn download_file(
     client: &reqwest::Client,
     file_path: &str,
@@ -266,11 +271,53 @@ async fn download_file(
     let meta_file = metadata_dir.join(format!("{file_path}.meta"));
 
     if let Some(parent) = local_file.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        let _ = fs::create_dir_all(parent).await;
     }
 
+    // Retry loop with exponential backoff
+    for attempt in 0..MAX_RETRIES {
+        if attempt > 0 {
+            let delay = RETRY_DELAYS.get(attempt as usize - 1).copied().unwrap_or(5000);
+            log.debug(&format!("[{}/{total}] Retry {attempt} for {file_path} after {delay}ms",
+                progress.load(Ordering::Relaxed) + 1));
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+        }
+
+        let result = download_file_once(
+            client,
+            file_path,
+            url,
+            &local_file,
+            &temp_file,
+            &meta_file,
+            progress,
+            total,
+            log,
+        ).await;
+
+        match result {
+            DlResult::Downloaded | DlResult::Skipped => return result,
+            DlResult::Failed if attempt < MAX_RETRIES - 1 => continue,
+            DlResult::Failed => return DlResult::Failed,
+        }
+    }
+
+    DlResult::Failed
+}
+
+async fn download_file_once(
+    client: &reqwest::Client,
+    file_path: &str,
+    url: &str,
+    local_file: &Path,
+    temp_file: &Path,
+    meta_file: &Path,
+    progress: &AtomicUsize,
+    total: usize,
+    log: &Logger,
+) -> DlResult {
     let mut req = client.get(url);
-    let (cached_etag, cached_lm) = read_metadata(&meta_file);
+    let (cached_etag, cached_lm) = read_metadata(meta_file).await;
     if let Some(ref etag) = cached_etag {
         req = req.header("If-None-Match", etag.as_str());
     }
@@ -334,20 +381,20 @@ async fn download_file(
         }
     };
 
-    if let Err(e) = std::fs::write(&temp_file, &bytes) {
+    if let Err(e) = fs::write(temp_file, &bytes).await {
         let n = progress.fetch_add(1, Ordering::Relaxed) + 1;
         log.error(&format!("[{n}/{total}] Failed writing {file_path}: {e}"));
         return DlResult::Failed;
     }
 
-    if let Err(e) = std::fs::rename(&temp_file, &local_file) {
+    if let Err(e) = fs::rename(temp_file, local_file).await {
         let n = progress.fetch_add(1, Ordering::Relaxed) + 1;
         log.error(&format!("[{n}/{total}] Failed moving {file_path}: {e}"));
-        let _ = std::fs::remove_file(&temp_file);
+        let _ = fs::remove_file(temp_file).await;
         return DlResult::Failed;
     }
 
-    save_metadata(&meta_file, &etag, &last_modified);
+    save_metadata(meta_file, &etag, &last_modified).await;
 
     let n = progress.fetch_add(1, Ordering::Relaxed) + 1;
     log.info(&format!("[{n}/{total}] ⬇️  {GREEN}Downloaded{NC}: {file_path}"));
@@ -367,8 +414,8 @@ async fn main() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(50);
 
-    std::fs::create_dir_all(&download_dir).expect("Failed to create download directory");
-    std::fs::create_dir_all(&metadata_dir).expect("Failed to create metadata directory");
+    fs::create_dir_all(&download_dir).await.expect("Failed to create download directory");
+    fs::create_dir_all(&metadata_dir).await.expect("Failed to create metadata directory");
 
     let log = Arc::new(Logger::new(args.verbose));
     log.info(&format!("Starting mirror from {base_url} to {}", download_dir.display()));
@@ -377,6 +424,8 @@ async fn main() {
         .user_agent("mirror-caddy/0.1-rust")
         .timeout(std::time::Duration::from_secs(300))
         .connect_timeout(std::time::Duration::from_secs(60))
+        .pool_max_idle_per_host(max_concurrent)
+        .http2_adaptive_window(true)
         .build()
         .expect("Failed to create HTTP client");
 
@@ -428,7 +477,9 @@ async fn main() {
         let log = log.clone();
 
         handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.unwrap();
+            let Ok(_permit) = sem.acquire().await else {
+                return DlResult::Failed;
+            };
             download_file(
                 &client,
                 &file_path,
